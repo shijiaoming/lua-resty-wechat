@@ -1,4 +1,4 @@
-# lua-resty-wechat
+# lua-wechat
 
 [![GitHub license](https://img.shields.io/github/license/CharLemAznable/lua-resty-wechat.svg)](https://github.com/CharLemAznable/lua-resty-wechat/blob/master/LICENSE)
 
@@ -57,60 +57,144 @@
 ## 示例
 
   nginx配置:
-
-``` nginx
+my-nginx配置:
+```nginx
 http {
-  lua_package_path 'path to lua files';
-  resolver 114.114.114.114;
+    # http模块是不会使用etc/hosts进行DNS解析的，所以要根据自己的网络进行配置
+    resolver 223.5.5.5 223.6.6.6 1.2.4.8 114.114.114.114 8.8.8.8 valid=3600s;
 
-  lua_shared_dict wechat 1M; # 利用共享内存保持单例定时器
-  init_by_lua '
-    ngx.shared.wechat:delete("updater") -- 清除定时器标识
-    require("resty.wechat.config")
-  ';
-  init_worker_by_lua '
-    local ok, err = ngx.shared.wechat:add("updater", "1") -- 单进程启动定时器
-    if not ok or err then return end
-    require("resty.wechat.proxy_access_token")()
-  ';
-  server {
-    location /wechat-server {
-      content_by_lua '
-        require("resty.wechat.server")()
-      ';
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+
+    server_tokens 	off;
+    sendfile            on;
+    tcp_nopush          on;
+    tcp_nodelay         on;
+    keepalive_timeout   65;
+    types_hash_max_size 2048;
+
+    proxy_buffers 8 16k;
+    proxy_buffer_size 32k;
+
+    include             mime.types;
+    default_type        application/octet-stream;
+
+    include conf.d/*.conf;
+
+    # 仅开发环境，生产环境一定要设置为on
+    lua_code_cache off;
+    
+    # 引入lua,根据自己的路径修改
+    lua_package_path "/usr/local/openresty/lualib/?.lua;;";
+    lua_package_cpath "/usr/local/openresty/lualib/?.so;;";
+    
+    # 共享内存块大小
+    lua_shared_dict wechat 1M; # 利用共享内存保持单例定时器
+    
+    # 清除定时器标识
+    init_by_lua '
+      ngx.shared.wechat:delete("updater")
+      require("resty.wechat.config")
+    ';
+
+    # 单进程启动定时器
+    init_worker_by_lua '
+      local ok, err = ngx.shared.wechat:add("updater", "1")
+      if not ok or err then return end
+      require("resty.wechat.proxy_access_token")()
+    ';
+
+    server {
+        listen       9290 default_server;
+        listen       [::]:9290 default_server;
+        server_name  _;
+    
+        #微信验证服务器文件代理方法，不用传txt校验文件
+        location ~ \.txt$ {
+             content_by_lua '
+                ngx.header.content_type = "text/plain";
+                local request_uri = ngx.var.request_uri
+                local params = string.sub(request_uri,12,string.len(request_uri)-4)
+                ngx.say(params)
+            ';
+         }
+        
+        location /wechat-server {
+          content_by_lua '
+            require("resty.wechat.server")()
+          ';
+        }
+        location /wechat-proxy/ {
+          rewrite_by_lua '
+            require("resty.wechat.proxy")("wechat-proxy") -- 参数为location路径
+          ';
+          access_by_lua '
+            require("resty.wechat.proxy_access_filter")()
+          ';
+          proxy_pass https://api.weixin.qq.com/;
+        }
+
+        # eg: http://w.topsales.net.cn/wechat-baseoauth?goto=http%3a%2f%2fw.topsales.net.cn%2fuserinfo
+        location /wechat-baseoauth { # param: goto
+          rewrite_by_lua '
+            require("resty.wechat.oauth").base_oauth("http://w.topsales.net.cn/wechat-redirect")
+          ';
+        }
+        
+        # eg: http://w.topsales.net.cn/wechat-useroauth?goto=http%3a%2f%2fw.topsales.net.cn%2fuserinfo
+        location /wechat-useroauth { # param: goto
+          rewrite_by_lua '
+            require("resty.wechat.oauth").userinfo_oauth("http://w.topsales.net.cn/wechat-redirect")
+          ';
+        }
+        location /wechat-redirect {
+          rewrite_by_lua '
+            require("resty.wechat.oauth").redirect()
+          ';
+        }
+        location /wechat-jssdk-config { # GET/POST, param: url, [api]
+          add_header Access-Control-Allow-Origin "if need cross-domain call";
+          content_by_lua '
+            require("resty.wechat.jssdk_config")()
+          ';
+        }
+        
+        # 方便测试使用, 微信中访问授权地址，直接返回用户信息
+        location /userinfo {
+            content_by_lua '
+              -- ngx.header.content_type = "text/plain";	
+              ngx.header.content_type="application/json;charset=utf8"
+              local request_uri = ngx.var.request_uri
+              ngx.say("from:" .. request_uri)                      
+              local cookie = require("resty.wechat.utils.cookie")
+              local base_oauth_key = wechat_config.base_oauth_key or "__rywy_base"
+              local userinfo_oauth_key = wechat_config.userinfo_oauth_key or "__rywy_userinfo"
+              
+              local aescodec = require("resty.wechat.utils.aes").new(wechat_config.cookie_aes_key or "vFrItmxI9ct8JbAg")
+              local cacheBaseStr = cookie.get(base_oauth_key) 
+              ngx.log(ngx.DEBUG,"userinfo_encrypt:",cacheBaseStr)
+              if cacheBaseStr then
+                 local base64Decode = ngx.decode_base64(cacheBaseStr) -- base64解析
+                 local decryptObj = aescodec:decrypt(base64Decode)  -- 解密
+                 ngx.log(ngx.DEBUG,"userinfo_decrypt:",decryptObj)
+                 ngx.say(decryptObj)
+              end 
+            
+              local cacheInfoStr = cookie.get(userinfo_oauth_key)
+              ngx.log(ngx.DEBUG,"userinfo_info_encrypt:",cacheInfoStr)
+              if cacheInfoStr then
+                  local base64Decode = ngx.decode_base64(cacheInfoStr)
+                  local decryptObj = aescodec:decrypt(base64Decode)
+                  ngx.log(ngx.DEBUG,"userinfo_info_decrypt:",decryptObj)
+                  ngx.say(decryptObj)
+              end 
+            ';
+        }
     }
-    location /wechat-proxy/ {
-      rewrite_by_lua '
-        require("resty.wechat.proxy")("wechat-proxy") -- 参数为location路径
-      ';
-      access_by_lua '
-        require("resty.wechat.proxy_access_filter")()
-      ';
-      proxy_pass https://api.weixin.qq.com/;
-    }
-    location /wechat-baseoauth { # param: goto
-      rewrite_by_lua '
-        require("resty.wechat.oauth").base_oauth("path to /wechat-redirect")
-      ';
-    }
-    location /wechat-useroauth { # param: goto
-      rewrite_by_lua '
-        require("resty.wechat.oauth").userinfo_oauth("path to /wechat-redirect")
-      ';
-    }
-    location /wechat-redirect {
-      rewrite_by_lua '
-        require("resty.wechat.oauth").redirect()
-      ';
-    }
-    location /wechat-jssdk-config { # GET/POST, param: url, [api]
-      add_header Access-Control-Allow-Origin "if need cross-domain call";
-      content_by_lua '
-        require("resty.wechat.jssdk_config")()
-      ';
-    }
-  }
-}
+
 ```
 
   网页注入JS-SDK权限:

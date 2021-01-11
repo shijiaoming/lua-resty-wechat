@@ -46,7 +46,10 @@ local mt = {
           end
 
           -- access_token time out, refresh
-          local res, err = require("resty.wechat.utils.http").new():request_uri(updateurl, updateparam)
+          ngx_log(ngx.DEBUG,"updateAccessToken_accessTokenKey:",accessTokenKey)
+          ngx_log(ngx.DEBUG,"updateAccessToken_updateurl:",updateurl)
+          ngx_log(ngx.DEBUG,"updateAccessToken_updateparam:",updateparam)
+          local res, err = require("resty.wechat.utils.http.lua").new():request_uri(updateurl, updateparam)
           if not res or err or tostring(res.status) ~= "200" then
             ngx_log(ngx.ERR, "failed to update access token: ", err or tostring(res.status))
             return
@@ -63,11 +66,11 @@ local mt = {
             return
           end
 
-          ngx_log(ngx.NOTICE, "succeed to set access token: ", res.body)
+          ngx_log(ngx.DEBUG, "succeed to set access token: ", res.body)
 
           -- refresh jsapi_ticket after refresh access_token
           ticketparam.query.access_token = resbody.access_token
-          local res, err = require("resty.wechat.utils.http").new():request_uri(ticketurl, ticketparam)
+          local res, err = require("resty.wechat.utils.http.lua").new():request_uri(ticketurl, ticketparam)
           ticketparam.query.access_token = nil
           if not res or err or tostring(res.status) ~= "200" then
             ngx_log(ngx.ERR, "failed to update jsapi ticket: ", err or tostring(res.status))
@@ -85,7 +88,7 @@ local mt = {
             return
           end
 
-          ngx_log(ngx.NOTICE, "succeed to set jsapi ticket: ", res.body)
+          ngx_log(ngx.DEBUG, "succeed to set jsapi ticket: ", res.body)
         end
       )
 

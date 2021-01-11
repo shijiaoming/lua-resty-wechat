@@ -39,7 +39,7 @@ local function oauth_access_token(code)
     headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
   }
 
-  local res, err = require("resty.wechat.utils.http").new():request_uri(access_token_addr, param)
+  local res, err = require("resty.wechat.utils.http.lua").new():request_uri(access_token_addr, param)
   if not res or err or tostring(res.status) ~= "200" then
     return nil, err or tostring(res.status)
   end
@@ -65,7 +65,7 @@ local function oauth_userinfo(access_token, openid)
     headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
   }
 
-  local res, err = require("resty.wechat.utils.http").new():request_uri(userinfo_addr, param)
+  local res, err = require("resty.wechat.utils.http.lua").new():request_uri(userinfo_addr, param)
   if not res or err or tostring(res.status) ~= "200" then
     return nil, err or tostring(res.status)
   end
@@ -108,7 +108,9 @@ function _M.base_oauth(redirect_uri, goto_param_name)
   if cookie.get(base_oauth_key) then
     return ngx.redirect(target, ngx.HTTP_MOVED_TEMPORARILY)
   end
-  return ngx.redirect(build_oauth_redirect_addr(redirect_uri, "snsapi_base", target), ngx.HTTP_MOVED_TEMPORARILY)
+  local redirectOAuthAddr = build_oauth_redirect_addr(redirect_uri, "snsapi_base", target);
+  ngx_log(ngx.DEBUG,"OAUTH_base_redirectAddr:",redirectOAuthAddr)
+  return ngx.redirect(redirectOAuthAddr, ngx.HTTP_MOVED_TEMPORARILY)
 end
 
 function _M.userinfo_oauth(redirect_uri, goto_param_name)
@@ -119,7 +121,9 @@ function _M.userinfo_oauth(redirect_uri, goto_param_name)
   if cookie.get(userinfo_oauth_key) then
     return ngx.redirect(target, ngx.HTTP_MOVED_TEMPORARILY)
   end
-  return ngx.redirect(build_oauth_redirect_addr(redirect_uri, "snsapi_userinfo", target), ngx.HTTP_MOVED_TEMPORARILY)
+  local redirectOAuthAddr = build_oauth_redirect_addr(redirect_uri, "snsapi_userinfo", target);
+  ngx_log(ngx.DEBUG,"OAUTH_userInfo_redirectAddr:",redirectOAuthAddr)
+  return ngx.redirect(redirectOAuthAddr, ngx.HTTP_MOVED_TEMPORARILY)
 end
 
 function _M.redirect()
@@ -136,6 +140,7 @@ function _M.redirect()
   end
 
   local encrypted_baseinfo = ngx.encode_base64(aescodec:encrypt(cjson.encode(baseinfo)))
+  ngx_log(ngx.DEBUG,"OAUTH_GET_openid:",base_oauth_key .. "" .. baseinfo)
   cookie.set({
     key = base_oauth_key,
     value = encrypted_baseinfo,
@@ -146,6 +151,7 @@ function _M.redirect()
 
   if userinfo then
     local encrypted_userinfo = ngx.encode_base64(aescodec:encrypt(cjson.encode(userinfo)))
+    ngx_log(ngx.DEBUG,"OAUTH_GET_userinfo:",userinfo_oauth_key .. "" .. encrypted_userinfo)
     cookie.set({
       key = userinfo_oauth_key,
       value = encrypted_userinfo,
@@ -155,7 +161,7 @@ function _M.redirect()
     })
   end
 
-  ngx.log(ngx.ERR, cjson.encode(ngx.header.Set_Cookie))
+  ngx.log(ngx.DEBUG, cjson.encode(ngx.header.Set_Cookie))
 
   return ngx.redirect(state, ngx.HTTP_MOVED_TEMPORARILY)
 end

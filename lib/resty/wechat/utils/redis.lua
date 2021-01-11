@@ -28,8 +28,16 @@ function _M.connect(self, opt)
   local ok, err = redis:connect(conf.host, conf.port)
   if not ok then return nil end
 
-  return setmetatable({ redis = redis, conf = conf }, mt)
-end
+  if opt.password then
+    redis:auth(opt.password)
+  end
+
+  if opt.database then
+    redis:select(opt.database) --select database
+  end
+
+    return setmetatable({ redis = redis, conf = conf }, mt)
+  end
 
 function _M.keepalive(self, maxIdleTimeout, poolSize)
   local redis = self.redis

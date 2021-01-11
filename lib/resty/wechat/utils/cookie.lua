@@ -3,6 +3,8 @@ local _M = { _VERSION = '0.0.1' }
 _G[modname] = _M
 
 function _M.get(key)
+  -- 获取所有cookie： ngx.var.http_cookie,  这里获取的是一个字符串，如果不存在则返回nil 。
+  -- 获取单个cookie： ngx.var.cookie_username, 获取单个cookie，_后面的cookie的name，如果不存在则返回nil 。
   return ngx.var["cookie_" .. key]
 end
 
